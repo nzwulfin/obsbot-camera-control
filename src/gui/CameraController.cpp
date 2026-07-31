@@ -349,10 +349,27 @@ bool CameraController::enableAutoFraming(bool enabled)
         }
 
         // Step 2: Set auto-framing mode after a brief delay (non-blocking)
+        const int subMode = m_currentState.framingSubMode;
         QTimer::singleShot(500, this,
-                [this, preservedFaceAE, preservedFaceFocus]() {
-            executeCommand("Set AutoFraming mode", [this]() {
-                return m_device->cameraSetAutoFramingModeU(Device::AutoFrmSingle, Device::AutoFrmUpperBody);
+                [this, subMode, preservedFaceAE, preservedFaceFocus]() {
+            Device::AutoFramingType groupSingle;
+            Device::AutoFramingType closeUpper;
+            switch (subMode) {
+            case 0:
+                groupSingle = Device::AutoFrmGroup;
+                closeUpper  = Device::AutoFrmNull;
+                break;
+            case 1:
+                groupSingle = Device::AutoFrmSingle;
+                closeUpper  = Device::AutoFrmCloseUp;
+                break;
+            default:
+                groupSingle = Device::AutoFrmSingle;
+                closeUpper  = Device::AutoFrmUpperBody;
+                break;
+            }
+            executeCommand("Set AutoFraming mode", [this, groupSingle, closeUpper]() {
+                return m_device->cameraSetAutoFramingModeU(groupSingle, closeUpper);
             });
             setFaceAE(preservedFaceAE);
             setFaceFocus(preservedFaceFocus);
@@ -372,6 +389,39 @@ bool CameraController::enableAutoFraming(bool enabled)
         }
         return success;
     }
+}
+
+bool CameraController::setFramingMode(int mode)
+{
+    if (!m_connected || m_v4l2Only) return false;
+
+    Device::AutoFramingType groupSingle;
+    Device::AutoFramingType closeUpper;
+    switch (mode) {
+    case 0:
+        groupSingle = Device::AutoFrmGroup;
+        closeUpper  = Device::AutoFrmNull;
+        break;
+    case 1:
+        groupSingle = Device::AutoFrmSingle;
+        closeUpper  = Device::AutoFrmCloseUp;
+        break;
+    default:
+        groupSingle = Device::AutoFrmSingle;
+        closeUpper  = Device::AutoFrmUpperBody;
+        break;
+    }
+
+    // Always persist the preference so it survives state polls and is
+    // applied when auto-framing is later enabled.
+    m_currentState.framingSubMode = mode;
+    if (m_currentState.autoFramingEnabled) {
+        int32_t ret = m_device->cameraSetAutoFramingModeU(groupSingle, closeUpper);
+        if (ret != 0)
+            emit commandFailed("Set Framing Mode", ret);
+    }
+    emit stateChanged(m_currentState);
+    return true;
 }
 
 bool CameraController::setAiMode(int mode, int subMode)
@@ -720,7 +770,7 @@ bool CameraController::setGestureControl(int gesture, bool enabled)
 
 bool CameraController::setHardwareMirror(bool enabled)
 {
-    if (!m_connected || m_v4l2Only || !isTiny4k()) return false;
+    if (!m_connected || m_v4l2Only || !isMeetSEFamily()) return false;
     return executeCommand("Set hardware mirror", [this, enabled]() {
         return m_device->cameraSetImageFlipHorizonU(enabled ? 1 : 0);
     });
@@ -1129,11 +1179,18 @@ void CameraController::updateState(bool includeImageControls)
         m_currentState.fovMode = status.tiny.fov;
     }
     m_currentState.devStatus = status.tiny.dev_status;
-    m_currentState.autoFramingEnabled = isOriginalTinyFamily()
-        ? status.tiny.ai_target != 0
-        : m_currentState.aiMode != Device::AiWorkModeNone;
+    if (isOriginalTinyFamily())
+        m_currentState.autoFramingEnabled = status.tiny.ai_target != 0;
+    else if (isMeetSEFamily())
+        m_currentState.autoFramingEnabled = status.tiny.gesture_para.gesture_auto_frame != 0;
+    else
+        m_currentState.autoFramingEnabled = m_currentState.aiMode != Device::AiWorkModeNone;
     m_currentState.trackSpeedMode = status.tiny.ai_tracker_speed;
     m_currentState.audioAutoGainEnabled = status.tiny.audio_auto_gain;
+    m_currentState.hardwareMirror = status.tiny.image_flip_hor != 0;
+    // framingSubMode is not synced from the camera poll. The status struct has
+    // a documented 2-3s lag, so reading it after a command would show stale data.
+    // The stored preference is authoritative; the camera is updated to match it.
 
     if (includeImageControls) {
     // Image controls - read current values from camera
@@ -1259,6 +1316,10 @@ void CameraController::applyConfigToCamera()
     }
     if (isOriginalTinyFamily())
         setTrackingStyle(settings.trackingStyle);
+    if (isMeetSEFamily()) {
+        setFramingMode(settings.framingSubMode);
+        setHardwareMirror(settings.hardwareMirror);
+    }
 
     // Image controls
     setBrightness(settings.brightness);
@@ -1301,6 +1362,10 @@ void CameraController::applyCurrentStateToCamera(const CameraState &uiState)
     }
     if (isOriginalTinyFamily())
         setTrackingStyle(uiState.trackingStyle);
+    if (isMeetSEFamily()) {
+        setFramingMode(uiState.framingSubMode);
+        setHardwareMirror(uiState.hardwareMirror);
+    }
     setHDR(uiState.hdrEnabled);
     setFOV(uiState.fovMode);
     setFaceAE(uiState.faceAEEnabled);
@@ -1347,6 +1412,8 @@ void CameraController::saveCurrentStateToConfig()
     settings.trackSpeed = m_currentState.trackSpeedMode;
     settings.trackingStyle = m_currentState.trackingStyle;
     settings.audioAutoGain = m_currentState.audioAutoGainEnabled;
+    settings.framingSubMode = m_currentState.framingSubMode;
+    settings.hardwareMirror = m_currentState.hardwareMirror;
 
     // Image controls
     settings.brightnessAuto = m_currentState.brightnessAuto;
@@ -1381,6 +1448,17 @@ bool CameraController::isOriginalTinyFamily() const
 bool CameraController::isTiny4k() const
 {
     return m_cameraInfo.productType == ObsbotProdTiny4k;
+}
+
+bool CameraController::isMeetSEFamily() const
+{
+    return m_cameraInfo.productType == ObsbotProdMeetSE ||
+           m_cameraInfo.productType == ObsbotProdMeet2;
+}
+
+bool CameraController::hasMeetSECapabilities() const
+{
+    return isMeetSEFamily();
 }
 
 void CameraController::refreshControlRanges()

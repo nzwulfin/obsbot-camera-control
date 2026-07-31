@@ -32,6 +32,13 @@ CameraSettingsWidget::CameraSettingsWidget(CameraController *controller, QWidget
     m_hdrCheckBox->setToolTip("Enhance image quality in high-contrast scenes");
     connect(m_hdrCheckBox, &QCheckBox::toggled, this, &CameraSettingsWidget::onHDRToggled);
     hdrLayout->addWidget(m_hdrCheckBox);
+
+    m_hardwareMirrorCheckBox = new QCheckBox("Hardware Mirror (horizontal flip)", this);
+    m_hardwareMirrorCheckBox->setToolTip("Flip image horizontally in hardware");
+    m_hardwareMirrorCheckBox->setVisible(m_controller->hasMeetSECapabilities());
+    connect(m_hardwareMirrorCheckBox, &QCheckBox::toggled,
+            this, &CameraSettingsWidget::onHardwareMirrorToggled);
+    hdrLayout->addWidget(m_hardwareMirrorCheckBox);
     layout->addWidget(m_advancedGroupBox);
 
     m_exposureGroupBox = new QGroupBox("Exposure", this);
@@ -430,6 +437,13 @@ void CameraSettingsWidget::onHDRToggled(bool checked)
     m_commandTimer->start(1000);
 }
 
+void CameraSettingsWidget::onHardwareMirrorToggled(bool checked)
+{
+    m_userInitiated = true;
+    m_controller->setHardwareMirror(checked);
+    m_commandTimer->start(1000);
+}
+
 void CameraSettingsWidget::onFOVChanged(int index)
 {
     m_userInitiated = true;
@@ -611,6 +625,9 @@ void CameraSettingsWidget::updateFromState(const CameraController::CameraState &
     m_exposureLabel->setVisible(!tiny4k);
     m_exposureComboBox->setVisible(!tiny4k);
 
+    const bool meetSE = m_controller->hasMeetSECapabilities();
+    m_hardwareMirrorCheckBox->setVisible(meetSE);
+
     // Only update if state differs, not user-initiated, command timer expired, and not settling
     bool commandInFlight = m_commandTimer->isActive();
     bool isSettling = m_controller->isSettling();
@@ -620,6 +637,12 @@ void CameraSettingsWidget::updateFromState(const CameraController::CameraState &
             m_hdrCheckBox->blockSignals(true);
             m_hdrCheckBox->setChecked(state.hdrEnabled);
             m_hdrCheckBox->blockSignals(false);
+        }
+
+        if (meetSE && m_hardwareMirrorCheckBox->isChecked() != state.hardwareMirror) {
+            m_hardwareMirrorCheckBox->blockSignals(true);
+            m_hardwareMirrorCheckBox->setChecked(state.hardwareMirror);
+            m_hardwareMirrorCheckBox->blockSignals(false);
         }
 
         if (m_fovComboBox->currentIndex() != state.fovMode) {

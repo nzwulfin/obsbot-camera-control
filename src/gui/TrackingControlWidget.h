@@ -44,6 +44,7 @@ public:
     void setTrackSpeed(int speedMode);
     void setTrackingStyle(int style);
     void setAudioAutoGain(bool enabled);
+    void setFramingMode(int mode);
     int currentAiMode() const { return m_modeCombo->currentData().toInt(); }
     int currentHumanSubMode() const { return m_humanSubModeCombo->currentData().toInt(); }
     bool isAutoZoomEnabled() const { return m_autoZoomCheckBox->isChecked(); }
@@ -67,6 +68,7 @@ private slots:
     void onSpeedChanged(int index);
     void onAudioGainToggled(bool checked);
     void onTrackingStyleChanged(int index);
+    void onFramingModeChanged(int index);
     void onFaceFocusToggled(bool checked);
 
     // Manual PTZ control slots
@@ -88,7 +90,10 @@ private:
     int m_trackingStyle = Device::AiVTrackStandard;
     bool m_userInitiated;  // Track if change was user-initiated
     QTimer *m_commandTimer;  // Debounce timer for command completion
-    bool m_tiny2Capabilities; // flag for advanced tracking features
+    bool m_tiny2Capabilities;    // flag for advanced tracking features
+    bool m_meetSECapabilities;   // flag for Meet SE framing controls
+    QWidget *m_framingModeContainer;
+    QComboBox *m_framingModeCombo;
 
     // Manual PTZ controls
     XYPad *m_xyPad;

@@ -31,6 +31,7 @@ public:
 
     // Getters for current UI state
     bool isHDREnabled() const { return m_hdrCheckBox->isChecked(); }
+    bool isHardwareMirrorEnabled() const { return m_hardwareMirrorCheckBox->isChecked(); }
     int getFOVMode() const { return m_fovComboBox->currentIndex(); }
     bool isFaceAEEnabled() const { return m_faceAECheckBox->isChecked(); }
     bool isBrightnessAuto() const { return false; }
@@ -50,6 +51,11 @@ public:
         m_hdrCheckBox->blockSignals(true);
         m_hdrCheckBox->setChecked(enabled);
         m_hdrCheckBox->blockSignals(false);
+    }
+    void setHardwareMirrorEnabled(bool enabled) {
+        m_hardwareMirrorCheckBox->blockSignals(true);
+        m_hardwareMirrorCheckBox->setChecked(enabled);
+        m_hardwareMirrorCheckBox->blockSignals(false);
     }
     void setFOVMode(int mode) {
         m_fovComboBox->blockSignals(true);
@@ -135,6 +141,7 @@ public:
 
 private slots:
     void onHDRToggled(bool checked);
+    void onHardwareMirrorToggled(bool checked);
     void onFOVChanged(int index);
     void onFaceAEToggled(bool checked);
     void onExposureAutoToggled(bool checked);
@@ -155,6 +162,7 @@ private:
     CameraController *m_controller;
 
     QCheckBox *m_hdrCheckBox;
+    QCheckBox *m_hardwareMirrorCheckBox;
     QComboBox *m_fovComboBox;
     QCheckBox *m_faceAECheckBox;
     QCheckBox *m_exposureAutoCheckBox;

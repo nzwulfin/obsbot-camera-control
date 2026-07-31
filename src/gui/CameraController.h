@@ -36,6 +36,7 @@ public:
         bool autoFramingEnabled;
         int aiMode;
         int aiSubMode;
+        int framingSubMode;   // Meet SE: 0=Group, 1=CloseUp, 2=UpperBody
         bool autoZoomEnabled;
         int trackSpeedMode;
         bool audioAutoGainEnabled;
@@ -75,6 +76,7 @@ public:
         // Status
         int zoomRatio;
         int devStatus;
+        bool hardwareMirror;
     };
 
     struct ParamRange {
@@ -104,9 +106,11 @@ public:
     bool hasTiny2Capabilities() const;
     bool hasOriginalTinyCapabilities() const { return isOriginalTinyFamily(); }
     bool hasTiny4kCapabilities() const { return isTiny4k(); }
+    bool hasMeetSECapabilities() const;
 
     // Tracking controls
     bool enableAutoFraming(bool enabled);
+    bool setFramingMode(int mode);  // Meet SE: 0=Group, 1=CloseUp, 2=UpperBody
     bool setAiMode(int mode, int subMode);
     bool setAutoZoom(bool enabled);
     bool setTrackSpeed(int speedMode);
@@ -222,6 +226,7 @@ private:
     bool isTiny2Family() const;
     bool isOriginalTinyFamily() const;
     bool isTiny4k() const;
+    bool isMeetSEFamily() const;
     void tryV4l2Fallback();
     void connectV4l2(const std::string &devicePath);
     void refreshV4l2ControlRanges();

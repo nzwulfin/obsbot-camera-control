@@ -54,6 +54,8 @@ public:
         bool autoZoom;        // Enable adaptive auto zoom
         int trackSpeed;       // Device::AiTrackSpeedType
         int trackingStyle;    // Device::AiVerticalTrackType (Tiny/Tiny 4K)
+        int framingSubMode;   // Meet SE: 0=Group, 1=CloseUp, 2=UpperBody
+        bool hardwareMirror;  // Meet SE: hardware horizontal flip
 
         // Image controls
         bool brightnessAuto;  // Auto mode for brightness

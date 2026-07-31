@@ -25,6 +25,7 @@ TrackingControlWidget::TrackingControlWidget(CameraController *controller, QWidg
     connect(m_controlThrottle, &QTimer::timeout, this, &TrackingControlWidget::flushPendingCommands);
 
     m_tiny2Capabilities = m_controller->hasTiny2Capabilities();
+    m_meetSECapabilities = m_controller->hasMeetSECapabilities();
 
     QVBoxLayout *layout = new QVBoxLayout(this);
     layout->setContentsMargins(8, 8, 8, 14);
@@ -132,6 +133,24 @@ TrackingControlWidget::TrackingControlWidget(CameraController *controller, QWidg
     advancedLayout->addWidget(m_audioGainCheckBox);
 
     groupLayout->addWidget(m_advancedContainer);
+
+    // Framing view mode (Meet SE)
+    m_framingModeContainer = new QWidget(this);
+    QHBoxLayout *framingLayout = new QHBoxLayout(m_framingModeContainer);
+    framingLayout->setContentsMargins(0, 8, 0, 0);
+    QLabel *framingLabel = new QLabel("View Mode", this);
+    framingLabel->setStyleSheet("font-size: 11px; font-weight: 600;");
+    m_framingModeCombo = new QComboBox(this);
+    m_framingModeCombo->setSizeAdjustPolicy(QComboBox::AdjustToContents);
+    m_framingModeCombo->addItem("Group", 0);
+    m_framingModeCombo->addItem("Upper Body", 2);
+    m_framingModeCombo->addItem("Close-up", 1);
+    connect(m_framingModeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, &TrackingControlWidget::onFramingModeChanged);
+    framingLayout->addWidget(framingLabel);
+    framingLayout->addWidget(m_framingModeCombo, 1);
+    groupLayout->addWidget(m_framingModeContainer);
+
     updateTiny2Visibility();
 
     layout->addWidget(m_trackingGroupBox);
@@ -326,6 +345,15 @@ void TrackingControlWidget::setAudioAutoGain(bool enabled)
     m_audioGainCheckBox->setChecked(enabled);
 }
 
+void TrackingControlWidget::setFramingMode(int mode)
+{
+    int idx = m_framingModeCombo->findData(mode);
+    if (idx >= 0) {
+        QSignalBlocker blocker(m_framingModeCombo);
+        m_framingModeCombo->setCurrentIndex(idx);
+    }
+}
+
 void TrackingControlWidget::onTrackingToggled(bool checked)
 {
     m_userInitiated = true;
@@ -432,6 +460,15 @@ void TrackingControlWidget::updateFromState(const CameraController::CameraState 
             m_audioGainCheckBox->blockSignals(true);
             m_audioGainCheckBox->setChecked(state.audioAutoGainEnabled);
             m_audioGainCheckBox->blockSignals(false);
+        }
+    }
+
+    if (m_meetSECapabilities && !m_userInitiated && !commandInFlight && !isSettling) {
+        int idx = m_framingModeCombo->findData(state.framingSubMode);
+        if (idx >= 0 && m_framingModeCombo->currentIndex() != idx) {
+            m_framingModeCombo->blockSignals(true);
+            m_framingModeCombo->setCurrentIndex(idx);
+            m_framingModeCombo->blockSignals(false);
         }
     }
 
@@ -559,6 +596,15 @@ void TrackingControlWidget::onAudioGainToggled(bool checked)
     m_commandTimer->start(1000);
 }
 
+void TrackingControlWidget::onFramingModeChanged(int index)
+{
+    Q_UNUSED(index);
+    if (!m_meetSECapabilities) return;
+    m_userInitiated = true;
+    m_controller->setFramingMode(m_framingModeCombo->currentData().toInt());
+    m_commandTimer->start(1000);
+}
+
 void TrackingControlWidget::setTrackingStyle(int style)
 {
     if (style < Device::AiVTrackStandard || style > Device::AiVTrackMotion) {
@@ -592,10 +638,12 @@ void TrackingControlWidget::updateTiny2Visibility()
     // Re-read on every pass: the constructor runs before a camera is
     // connected, so a value captured once there can never become true.
     m_tiny2Capabilities = m_controller->hasTiny2Capabilities();
+    m_meetSECapabilities = m_controller->hasMeetSECapabilities();
 
     m_advancedContainer->setVisible(m_tiny2Capabilities);
     m_originalTinyContainer->setVisible(m_controller->hasOriginalTinyCapabilities());
     m_humanSubModeCombo->setEnabled(m_tiny2Capabilities && m_modeCombo->currentData().toInt() == Device::AiWorkModeHuman);
+    m_framingModeContainer->setVisible(m_meetSECapabilities);
 }
 
 void TrackingControlWidget::updatePTZControlsState()
