@@ -14,6 +14,8 @@ CameraController::CameraController(QObject *parent)
     m_cachedState = {};
     m_currentState.whiteBalanceKelvin = 5000;
     m_cachedState.whiteBalanceKelvin = 5000;
+    m_currentState.framingSubMode = 2;  // UpperBody
+    m_cachedState.framingSubMode = 2;
     m_lastRequestedWhiteBalance = static_cast<int>(Device::DevWhiteBalanceAuto);
     m_whiteBalanceFallbackActive = false;
     m_fallbackWhiteBalanceMode = static_cast<int>(Device::DevWhiteBalanceAuto);
@@ -54,27 +56,39 @@ void CameraController::connectToCamera(const QString &devicePath)
     };
 
     auto onDevChanged = [this, pickDevice](std::string /*dev_sn*/, bool connected, void * /*param*/) {
+        // Resolve the device on the SDK thread while the device list is still valid.
+        // The list may be empty by the time the main-thread invoke runs (SDK cleanup
+        // happens before the event loop processes the queued call).
+        std::shared_ptr<Device> dev;
         if (connected) {
             auto dev_list = Devices::get().getDevList();
-            auto dev = pickDevice(dev_list);
-            if (dev) {
-                m_device = dev;
-                m_connected = true;
-                m_cameraInfo.name = QString::fromStdString(m_device->devName());
-                m_cameraInfo.serialNumber = QString::fromStdString(m_device->devSn());
-                m_cameraInfo.version = QString::fromStdString(m_device->devVersion());
-                m_cameraInfo.productType = m_device->productType();
-                m_cameraInfo.connected = true;
-                refreshControlRanges();
-                emit cameraConnected(m_cameraInfo);
-                updateState();
-            }
-        } else {
-            m_connected = false;
-            m_cameraInfo.connected = false;
-            resetControlRanges();
-            emit cameraDisconnected();
+            dev = pickDevice(dev_list);
+            if (dev) m_sdkDeviceFound.store(true);
         }
+        // Dispatch Qt state work to the main thread — QTimer, signals, and shared
+        // state must not be touched from the SDK callback thread.
+        QMetaObject::invokeMethod(this, [this, dev, connected]() {
+            if (connected) {
+                if (dev) {
+                    if (m_v4l2ScanTimer) m_v4l2ScanTimer->stop();
+                    m_device = dev;
+                    m_connected = true;
+                    m_cameraInfo.name = QString::fromStdString(m_device->devName());
+                    m_cameraInfo.serialNumber = QString::fromStdString(m_device->devSn());
+                    m_cameraInfo.version = QString::fromStdString(m_device->devVersion());
+                    m_cameraInfo.productType = m_device->productType();
+                    m_cameraInfo.connected = true;
+                    refreshControlRanges();
+                    emit cameraConnected(m_cameraInfo);
+                    updateState();
+                }
+            } else {
+                m_connected = false;
+                m_cameraInfo.connected = false;
+                resetControlRanges();
+                emit cameraDisconnected();
+            }
+        }, Qt::QueuedConnection);
     };
 
     Devices::get().setDevChangedCallback(onDevChanged, nullptr);
@@ -102,18 +116,18 @@ void CameraController::connectToCamera(const QString &devicePath)
 
 void CameraController::tryV4l2Fallback()
 {
-    auto path = V4l2Backend::findObsbotDevice();
-    if (!path.empty()) {
-        connectV4l2(path);
-        return;
-    }
+    m_sdkDeviceFound.store(false);
 
     if (!m_v4l2ScanTimer) {
         m_v4l2ScanTimer = new QTimer(this);
         m_v4l2ScanTimer->setSingleShot(false);
         connect(m_v4l2ScanTimer, &QTimer::timeout, this, [this]() {
-            if (m_connected)
+            // m_sdkDeviceFound is set atomically from the SDK thread the moment
+            // onDevChanged fires — no event-loop ordering dependency.
+            if (m_connected || m_sdkDeviceFound.load()) {
+                m_v4l2ScanTimer->stop();
                 return;
+            }
             auto path = V4l2Backend::findObsbotDevice();
             if (!path.empty()) {
                 m_v4l2ScanTimer->stop();
@@ -121,11 +135,13 @@ void CameraController::tryV4l2Fallback()
             }
         });
     }
-    m_v4l2ScanTimer->start(3000);
+    m_v4l2ScanTimer->start(5000);
 }
 
 void CameraController::connectV4l2(const std::string &devicePath)
 {
+    if (m_connected || m_sdkDeviceFound.load()) return;
+
     if (!m_v4l2.open(devicePath))
         return;
 
@@ -260,9 +276,57 @@ bool CameraController::hasTiny2Capabilities() const
     return isTiny2Family();
 }
 
+bool CameraController::hasMeetSECapabilities() const
+{
+    return isMeetSEFamily();
+}
+
 bool CameraController::enableAutoFraming(bool enabled)
 {
     if (!m_connected || m_v4l2Only) return false;
+
+    if (isMeetSEFamily()) {
+        // Meet SE: use commanded-state tracking — poll is held at m_commandedAutoFraming
+        // until gesture_auto_frame confirms the transition. No settling timer needed.
+        m_commandedAutoFraming = enabled;
+        m_autoFramingPending = true;
+
+        if (enabled) {
+            // Direct cameraSetAutoFramingModeU — no MediaMode preamble.
+            // cameraSetMediaModeU before this resets camera state on firmware 4.6.3.2.
+            Device::AutoFramingType groupSingle, closeUpper;
+            switch (m_currentState.framingSubMode) {
+                case 0:  // Group
+                    groupSingle = Device::AutoFrmGroup;
+                    closeUpper  = Device::AutoFrmNull;
+                    break;
+                case 1:  // CloseUp
+                    groupSingle = Device::AutoFrmSingle;
+                    closeUpper  = Device::AutoFrmCloseUp;
+                    break;
+                case 2:  // UpperBody
+                default:
+                    groupSingle = Device::AutoFrmSingle;
+                    closeUpper  = Device::AutoFrmUpperBody;
+                    break;
+            }
+            executeCommand("Enable AutoFraming (MeetSE)", [this, groupSingle, closeUpper]() {
+                return m_device->cameraSetAutoFramingModeU(groupSingle, closeUpper);
+            });
+            setFocusAbsolute(0, true);
+        } else {
+            // MediaModeNormal disables tracking. Ignore SDK return value — camera
+            // responds correctly even if SDK reports failure for this device category.
+            executeCommand("Disable AutoFraming (MeetSE)", [this]() {
+                return m_device->cameraSetMediaModeU(Device::MediaModeNormal);
+            });
+            setFocusAbsolute(m_currentState.manualFocusValue, false);
+        }
+
+        m_currentState.autoFramingEnabled = enabled;
+        emit stateChanged(m_currentState);
+        return true;
+    }
 
     if (enabled) {
         // Step 1: Set MediaMode to AutoFrame
@@ -274,26 +338,40 @@ bool CameraController::enableAutoFraming(bool enabled)
 
         // Step 2: Set auto-framing mode after a brief delay (non-blocking)
         QTimer::singleShot(500, [this]() {
-            executeCommand("Set AutoFraming mode", [this]() {
-                return m_device->cameraSetAutoFramingModeU(Device::AutoFrmSingle, Device::AutoFrmUpperBody);
+            Device::AutoFramingType groupSingle, closeUpper;
+            switch (m_currentState.framingSubMode) {
+                case 0:  // Group
+                    groupSingle = Device::AutoFrmGroup;
+                    closeUpper  = Device::AutoFrmNull;
+                    break;
+                case 1:  // CloseUp
+                    groupSingle = Device::AutoFrmSingle;
+                    closeUpper  = Device::AutoFrmCloseUp;
+                    break;
+                case 2:  // UpperBody
+                default:
+                    groupSingle = Device::AutoFrmSingle;
+                    closeUpper  = Device::AutoFrmUpperBody;
+                    break;
+            }
+            executeCommand("Set AutoFraming mode", [this, groupSingle, closeUpper]() {
+                return m_device->cameraSetAutoFramingModeU(groupSingle, closeUpper);
             });
         });
 
-        // Restore auto focus when auto-framing is enabled
         setFocusAbsolute(0, true);
-
         m_currentState.autoFramingEnabled = true;
+        beginSettling(2000);
         emit stateChanged(m_currentState);
-        return true;  // First command succeeded, second is pending
+        return true;
     } else {
         bool success = executeCommand("Disable AutoFraming", [this]() {
             return m_device->cameraSetMediaModeU(Device::MediaModeNormal);
         });
         if (success) {
-            // Switch to manual focus when auto-framing is disabled
             setFocusAbsolute(m_currentState.manualFocusValue, false);
-
             m_currentState.autoFramingEnabled = false;
+            beginSettling(2000);
             emit stateChanged(m_currentState);
         }
         return success;
@@ -719,7 +797,22 @@ void CameraController::updateState()
     m_currentState.manualFocusValue = status.tiny.manual_focus_value;
     m_currentState.fovMode = status.tiny.fov;
     m_currentState.devStatus = status.tiny.dev_status;
-    m_currentState.autoFramingEnabled = (m_currentState.aiMode != Device::AiWorkModeNone);
+    if (isMeetSEFamily()) {
+        bool cameraReports = (status.tiny.gesture_para.gesture_auto_frame != 0);
+        if (m_autoFramingPending) {
+            // Hold commanded state until camera poll confirms the transition.
+            // This handles gesture_auto_frame's unpredictable reporting lag without timers.
+            if (cameraReports == m_commandedAutoFraming)
+                m_autoFramingPending = false;
+            m_currentState.autoFramingEnabled = m_commandedAutoFraming;
+        } else {
+            // Camera confirmed — trust poll so gesture-triggered changes are reflected.
+            m_currentState.autoFramingEnabled = cameraReports;
+        }
+        m_currentState.hardwareMirror = (status.tiny.image_flip_hor != 0);
+    } else {
+        m_currentState.autoFramingEnabled = (m_currentState.aiMode != Device::AiWorkModeNone);
+    }
     m_currentState.trackSpeedMode = status.tiny.ai_tracker_speed;
     m_currentState.audioAutoGainEnabled = status.tiny.audio_auto_gain;
 
@@ -816,6 +909,11 @@ void CameraController::applyConfigToCamera()
         setAudioAutoGain(settings.audioAutoGain);
     }
 
+    if (isMeetSEFamily()) {
+        setFramingMode(settings.framingSubMode);
+        setHardwareMirror(settings.hardwareMirror);
+    }
+
     // Image controls
     setBrightness(settings.brightness);
     setContrast(settings.contrast);
@@ -841,7 +939,6 @@ void CameraController::applyCurrentStateToCamera(const CameraState &uiState)
     // Cache the intended state
     m_cachedState = uiState;
 
-    // Begin settling period - block status updates for 2 seconds
     beginSettling(2000);
 
     // Apply the current UI state to camera (respects user changes)
@@ -889,6 +986,8 @@ void CameraController::saveCurrentStateToConfig()
     settings.autoZoom = m_currentState.autoZoomEnabled;
     settings.trackSpeed = m_currentState.trackSpeedMode;
     settings.audioAutoGain = m_currentState.audioAutoGainEnabled;
+    settings.framingSubMode = m_currentState.framingSubMode;
+    settings.hardwareMirror = m_currentState.hardwareMirror;
 
     // Image controls
     settings.brightnessAuto = m_currentState.brightnessAuto;
@@ -909,6 +1008,60 @@ bool CameraController::isTiny2Family() const
     return m_cameraInfo.productType == ObsbotProdTiny2 ||
            m_cameraInfo.productType == ObsbotProdTiny2Lite ||
            m_cameraInfo.productType == ObsbotProdTinySE;
+}
+
+bool CameraController::isMeetSEFamily() const
+{
+    return m_cameraInfo.productType == ObsbotProdMeetSE ||
+           m_cameraInfo.productType == ObsbotProdMeet2;
+}
+
+bool CameraController::setFramingMode(int mode)
+{
+    if (!m_connected || m_v4l2Only || !isMeetSEFamily()) return false;
+
+    m_currentState.framingSubMode = mode;
+
+    if (m_currentState.autoFramingEnabled) {
+        Device::AutoFramingType groupSingle, closeUpper;
+        switch (mode) {
+            case 0:  // Group
+                groupSingle = Device::AutoFrmGroup;
+                closeUpper  = Device::AutoFrmNull;
+                break;
+            case 1:  // CloseUp
+                groupSingle = Device::AutoFrmSingle;
+                closeUpper  = Device::AutoFrmCloseUp;
+                break;
+            case 2:  // UpperBody
+            default:
+                groupSingle = Device::AutoFrmSingle;
+                closeUpper  = Device::AutoFrmUpperBody;
+                break;
+        }
+        executeCommand("Set Framing Mode", [this, groupSingle, closeUpper]() {
+            return m_device->cameraSetAutoFramingModeU(groupSingle, closeUpper);
+        });
+    }
+
+    emit stateChanged(m_currentState);
+    return true;
+}
+
+bool CameraController::setHardwareMirror(bool enabled)
+{
+    if (!m_connected || m_v4l2Only || !isMeetSEFamily()) return false;
+
+    bool success = executeCommand("Set hardware mirror", [this, enabled]() {
+        return m_device->cameraSetImageFlipHorizonU(enabled ? 1 : 0);
+    });
+
+    if (success) {
+        m_currentState.hardwareMirror = enabled;
+        emit stateChanged(m_currentState);
+    }
+
+    return success;
 }
 
 void CameraController::refreshControlRanges()

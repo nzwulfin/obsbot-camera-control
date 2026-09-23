@@ -4,6 +4,7 @@
 #include <QObject>
 #include <QTimer>
 #include <QMap>
+#include <atomic>
 #include <memory>
 #include <functional>
 #include <vector>
@@ -38,6 +39,8 @@ public:
         bool autoZoomEnabled;
         int trackSpeedMode;
         bool audioAutoGainEnabled;
+        int framingSubMode;    // Meet SE: 0=Group, 1=CloseUp, 2=UpperBody
+        bool hardwareMirror;   // Meet SE: hardware horizontal flip
 
         // PTZ
         double pan;
@@ -91,6 +94,7 @@ public:
     // State
     CameraState getCurrentState();
     bool hasTiny2Capabilities() const;
+    bool hasMeetSECapabilities() const;
 
     // Tracking controls
     bool enableAutoFraming(bool enabled);
@@ -98,6 +102,7 @@ public:
     bool setAutoZoom(bool enabled);
     bool setTrackSpeed(int speedMode);
     bool setAudioAutoGain(bool enabled);
+    bool setFramingMode(int mode);   // Meet SE: 0=Group, 1=CloseUp, 2=UpperBody
 
     // PTZ controls
     bool setPanTilt(double pan, double tilt);
@@ -112,6 +117,7 @@ public:
     bool setFaceAE(bool enabled);
     bool setFaceFocus(bool enabled);
     bool setFocusAbsolute(int position, bool autoFocus);
+    bool setHardwareMirror(bool enabled);  // Meet SE only
 
     // Image controls
     void setBrightnessAuto(bool enabled) { m_currentState.brightnessAuto = enabled; }
@@ -151,6 +157,9 @@ signals:
 private:
     std::shared_ptr<Device> m_device;
     bool m_connected;
+    std::atomic<bool> m_sdkDeviceFound{false};  // written from SDK thread before invokeMethod
+    bool m_commandedAutoFraming = false;  // Meet SE: last value sent to camera
+    bool m_autoFramingPending = false;    // Meet SE: true until poll confirms commanded state
     QString m_selectedDevicePath;
     bool m_v4l2Only = false;
     V4l2Backend m_v4l2;
@@ -170,6 +179,7 @@ private:
     bool m_whiteBalanceFallbackActive;
     int m_fallbackWhiteBalanceMode;
     bool isTiny2Family() const;
+    bool isMeetSEFamily() const;
     void tryV4l2Fallback();
     void connectV4l2(const std::string &devicePath);
     void refreshV4l2ControlRanges();

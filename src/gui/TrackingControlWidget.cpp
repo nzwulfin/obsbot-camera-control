@@ -18,6 +18,7 @@ TrackingControlWidget::TrackingControlWidget(CameraController *controller, QWidg
     connect(m_controlThrottle, &QTimer::timeout, this, &TrackingControlWidget::flushPendingCommands);
 
     m_tiny2Capabilities = m_controller->hasTiny2Capabilities();
+    m_meetSECapabilities = m_controller->hasMeetSECapabilities();
 
     QVBoxLayout *layout = new QVBoxLayout(this);
     layout->setContentsMargins(8, 14, 8, 14);
@@ -33,6 +34,29 @@ TrackingControlWidget::TrackingControlWidget(CameraController *controller, QWidg
     m_trackingCheckBox->setStyleSheet("font-weight: 600; font-size: 14px;");
     connect(m_trackingCheckBox, &QCheckBox::toggled, this, &TrackingControlWidget::onTrackingToggled);
     groupLayout->addWidget(m_trackingCheckBox);
+
+    // Meet SE: View Mode container
+    m_meetSEContainer = new QWidget(this);
+    QVBoxLayout *meetSELayout = new QVBoxLayout(m_meetSEContainer);
+    meetSELayout->setContentsMargins(0, 8, 0, 0);
+    meetSELayout->setSpacing(8);
+
+    QHBoxLayout *framingLayout = new QHBoxLayout();
+    QLabel *framingLabel = new QLabel("View Mode", this);
+    framingLabel->setStyleSheet("font-size: 11px; font-weight: 600;");
+    m_framingModeCombo = new QComboBox(this);
+    m_framingModeCombo->setSizeAdjustPolicy(QComboBox::AdjustToContents);
+    m_framingModeCombo->addItem("Group", 0);
+    m_framingModeCombo->addItem("Upper Body", 2);
+    m_framingModeCombo->addItem("Close-up", 1);
+    connect(m_framingModeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, &TrackingControlWidget::onFramingModeChanged);
+    framingLayout->addWidget(framingLabel);
+    framingLayout->addWidget(m_framingModeCombo, 1);
+    meetSELayout->addLayout(framingLayout);
+
+    groupLayout->addWidget(m_meetSEContainer);
+    updateMeetSEVisibility();
 
     // Advanced controls container (Tiny 2 family)
     m_advancedContainer = new QWidget(this);
@@ -235,6 +259,15 @@ void TrackingControlWidget::setAudioAutoGain(bool enabled)
     m_audioGainCheckBox->setChecked(enabled);
 }
 
+void TrackingControlWidget::setFramingMode(int mode)
+{
+    int idx = m_framingModeCombo->findData(mode);
+    if (idx >= 0) {
+        QSignalBlocker blocker(m_framingModeCombo);
+        m_framingModeCombo->setCurrentIndex(idx);
+    }
+}
+
 void TrackingControlWidget::onTrackingToggled(bool checked)
 {
     m_userInitiated = true;
@@ -296,6 +329,21 @@ void TrackingControlWidget::updateFromState(const CameraController::CameraState 
     if (tiny2 != m_tiny2Capabilities) {
         m_tiny2Capabilities = tiny2;
         updateTiny2Visibility();
+    }
+
+    bool meetSE = m_controller->hasMeetSECapabilities();
+    if (meetSE != m_meetSECapabilities) {
+        m_meetSECapabilities = meetSE;
+        updateMeetSEVisibility();
+    }
+
+    if (m_meetSECapabilities && !m_userInitiated && !commandInFlight && !isSettling) {
+        int framingIdx = m_framingModeCombo->findData(state.framingSubMode);
+        if (framingIdx >= 0 && m_framingModeCombo->currentIndex() != framingIdx) {
+            m_framingModeCombo->blockSignals(true);
+            m_framingModeCombo->setCurrentIndex(framingIdx);
+            m_framingModeCombo->blockSignals(false);
+        }
     }
 
     if (m_tiny2Capabilities && !m_userInitiated && !commandInFlight && !isSettling) {
@@ -463,6 +511,24 @@ void TrackingControlWidget::updateTiny2Visibility()
 
     m_advancedContainer->setVisible(m_tiny2Capabilities);
     m_humanSubModeCombo->setEnabled(m_tiny2Capabilities && m_modeCombo->currentData().toInt() == Device::AiWorkModeHuman);
+}
+
+void TrackingControlWidget::updateMeetSEVisibility()
+{
+    if (!m_meetSEContainer) {
+        return;
+    }
+
+    m_meetSEContainer->setVisible(m_meetSECapabilities);
+}
+
+void TrackingControlWidget::onFramingModeChanged(int index)
+{
+    Q_UNUSED(index);
+    if (!m_meetSECapabilities) return;
+    m_userInitiated = true;
+    m_controller->setFramingMode(m_framingModeCombo->currentData().toInt());
+    m_commandTimer->start(1000);
 }
 
 void TrackingControlWidget::updatePTZControlsState()

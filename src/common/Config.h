@@ -53,6 +53,10 @@ public:
         bool autoZoom;        // Enable adaptive auto zoom
         int trackSpeed;       // Device::AiTrackSpeedType
 
+        // Meet SE tracking
+        int framingSubMode;   // 0=Group, 1=CloseUp, 2=UpperBody
+        bool hardwareMirror;  // Hardware horizontal flip
+
         // Image controls
         bool brightnessAuto;  // Auto mode for brightness
         int brightness;       // Typically 0-255 or similar range
