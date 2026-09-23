@@ -8,6 +8,8 @@ static constexpr int kDefaultWhiteBalanceKelvin = 4800;
 CameraController::CameraController(QObject *parent)
     : QObject(parent)
     , m_connected(false)
+    , m_commandedAutoFraming(false)
+    , m_autoFramingPending(false)
     , m_settlingTimer(nullptr)
 {
     m_currentState = {};
@@ -295,21 +297,7 @@ bool CameraController::enableAutoFraming(bool enabled)
             // Direct cameraSetAutoFramingModeU — no MediaMode preamble.
             // cameraSetMediaModeU before this resets camera state on firmware 4.6.3.2.
             Device::AutoFramingType groupSingle, closeUpper;
-            switch (m_currentState.framingSubMode) {
-                case 0:  // Group
-                    groupSingle = Device::AutoFrmGroup;
-                    closeUpper  = Device::AutoFrmNull;
-                    break;
-                case 1:  // CloseUp
-                    groupSingle = Device::AutoFrmSingle;
-                    closeUpper  = Device::AutoFrmCloseUp;
-                    break;
-                case 2:  // UpperBody
-                default:
-                    groupSingle = Device::AutoFrmSingle;
-                    closeUpper  = Device::AutoFrmUpperBody;
-                    break;
-            }
+            framingSubModeToSDKTypes(m_currentState.framingSubMode, groupSingle, closeUpper);
             executeCommand("Enable AutoFraming (MeetSE)", [this, groupSingle, closeUpper]() {
                 return m_device->cameraSetAutoFramingModeU(groupSingle, closeUpper);
             });
@@ -339,21 +327,7 @@ bool CameraController::enableAutoFraming(bool enabled)
         // Step 2: Set auto-framing mode after a brief delay (non-blocking)
         QTimer::singleShot(500, [this]() {
             Device::AutoFramingType groupSingle, closeUpper;
-            switch (m_currentState.framingSubMode) {
-                case 0:  // Group
-                    groupSingle = Device::AutoFrmGroup;
-                    closeUpper  = Device::AutoFrmNull;
-                    break;
-                case 1:  // CloseUp
-                    groupSingle = Device::AutoFrmSingle;
-                    closeUpper  = Device::AutoFrmCloseUp;
-                    break;
-                case 2:  // UpperBody
-                default:
-                    groupSingle = Device::AutoFrmSingle;
-                    closeUpper  = Device::AutoFrmUpperBody;
-                    break;
-            }
+            framingSubModeToSDKTypes(m_currentState.framingSubMode, groupSingle, closeUpper);
             executeCommand("Set AutoFraming mode", [this, groupSingle, closeUpper]() {
                 return m_device->cameraSetAutoFramingModeU(groupSingle, closeUpper);
             });
@@ -1016,6 +990,27 @@ bool CameraController::isMeetSEFamily() const
            m_cameraInfo.productType == ObsbotProdMeet2;
 }
 
+void CameraController::framingSubModeToSDKTypes(int mode,
+                                                 Device::AutoFramingType &groupSingle,
+                                                 Device::AutoFramingType &closeUpper) const
+{
+    switch (mode) {
+        case 0:  // Group
+            groupSingle = Device::AutoFrmGroup;
+            closeUpper  = Device::AutoFrmNull;
+            break;
+        case 1:  // CloseUp
+            groupSingle = Device::AutoFrmSingle;
+            closeUpper  = Device::AutoFrmCloseUp;
+            break;
+        case 2:  // UpperBody
+        default:
+            groupSingle = Device::AutoFrmSingle;
+            closeUpper  = Device::AutoFrmUpperBody;
+            break;
+    }
+}
+
 bool CameraController::setFramingMode(int mode)
 {
     if (!m_connected || m_v4l2Only || !isMeetSEFamily()) return false;
@@ -1024,21 +1019,7 @@ bool CameraController::setFramingMode(int mode)
 
     if (m_currentState.autoFramingEnabled) {
         Device::AutoFramingType groupSingle, closeUpper;
-        switch (mode) {
-            case 0:  // Group
-                groupSingle = Device::AutoFrmGroup;
-                closeUpper  = Device::AutoFrmNull;
-                break;
-            case 1:  // CloseUp
-                groupSingle = Device::AutoFrmSingle;
-                closeUpper  = Device::AutoFrmCloseUp;
-                break;
-            case 2:  // UpperBody
-            default:
-                groupSingle = Device::AutoFrmSingle;
-                closeUpper  = Device::AutoFrmUpperBody;
-                break;
-        }
+        framingSubModeToSDKTypes(mode, groupSingle, closeUpper);
         executeCommand("Set Framing Mode", [this, groupSingle, closeUpper]() {
             return m_device->cameraSetAutoFramingModeU(groupSingle, closeUpper);
         });

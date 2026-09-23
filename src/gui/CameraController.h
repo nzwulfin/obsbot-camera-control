@@ -158,8 +158,8 @@ private:
     std::shared_ptr<Device> m_device;
     bool m_connected;
     std::atomic<bool> m_sdkDeviceFound{false};  // written from SDK thread before invokeMethod
-    bool m_commandedAutoFraming = false;  // Meet SE: last value sent to camera
-    bool m_autoFramingPending = false;    // Meet SE: true until poll confirms commanded state
+    bool m_commandedAutoFraming;  // Meet SE: last value sent to camera
+    bool m_autoFramingPending;    // Meet SE: true until poll confirms commanded state
     QString m_selectedDevicePath;
     bool m_v4l2Only = false;
     V4l2Backend m_v4l2;
@@ -180,6 +180,9 @@ private:
     int m_fallbackWhiteBalanceMode;
     bool isTiny2Family() const;
     bool isMeetSEFamily() const;
+    void framingSubModeToSDKTypes(int mode,
+                                   Device::AutoFramingType &groupSingle,
+                                   Device::AutoFramingType &closeUpper) const;
     void tryV4l2Fallback();
     void connectV4l2(const std::string &devicePath);
     void refreshV4l2ControlRanges();
