@@ -116,6 +116,7 @@ private slots:
     void onFOVChanged(int index);
     void onFaceAEToggled(bool checked);
     void onFaceFocusToggled(bool checked);
+    void onHardwareMirrorToggled(bool checked);
     void onBrightnessAutoToggled(bool checked);
     void onBrightnessChanged(int value);
     void onContrastAutoToggled(bool checked);
@@ -132,6 +133,7 @@ private:
     QComboBox *m_fovComboBox;
     QCheckBox *m_faceAECheckBox;
     QCheckBox *m_faceFocusCheckBox;
+    QCheckBox *m_hardwareMirrorCheckBox;  // Meet SE only
 
     // Image controls
     QCheckBox *m_brightnessAutoCheckBox;
