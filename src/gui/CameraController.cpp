@@ -335,7 +335,6 @@ bool CameraController::enableAutoFraming(bool enabled)
 
         setFocusAbsolute(0, true);
         m_currentState.autoFramingEnabled = true;
-        beginSettling(2000);
         emit stateChanged(m_currentState);
         return true;
     } else {
@@ -345,7 +344,6 @@ bool CameraController::enableAutoFraming(bool enabled)
         if (success) {
             setFocusAbsolute(m_currentState.manualFocusValue, false);
             m_currentState.autoFramingEnabled = false;
-            beginSettling(2000);
             emit stateChanged(m_currentState);
         }
         return success;
