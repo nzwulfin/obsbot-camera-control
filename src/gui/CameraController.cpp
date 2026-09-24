@@ -54,27 +54,39 @@ void CameraController::connectToCamera(const QString &devicePath)
     };
 
     auto onDevChanged = [this, pickDevice](std::string /*dev_sn*/, bool connected, void * /*param*/) {
+        // Resolve the device on the SDK thread while the device list is still valid.
+        // The list may be empty by the time the main-thread invoke runs (SDK cleanup
+        // happens before the event loop processes the queued call).
+        std::shared_ptr<Device> dev;
         if (connected) {
             auto dev_list = Devices::get().getDevList();
-            auto dev = pickDevice(dev_list);
-            if (dev) {
-                m_device = dev;
-                m_connected = true;
-                m_cameraInfo.name = QString::fromStdString(m_device->devName());
-                m_cameraInfo.serialNumber = QString::fromStdString(m_device->devSn());
-                m_cameraInfo.version = QString::fromStdString(m_device->devVersion());
-                m_cameraInfo.productType = m_device->productType();
-                m_cameraInfo.connected = true;
-                refreshControlRanges();
-                emit cameraConnected(m_cameraInfo);
-                updateState();
-            }
-        } else {
-            m_connected = false;
-            m_cameraInfo.connected = false;
-            resetControlRanges();
-            emit cameraDisconnected();
+            dev = pickDevice(dev_list);
+            if (dev) m_sdkDeviceFound.store(true);
         }
+        // Dispatch Qt state work to the main thread — QTimer, signals, and shared
+        // state must not be touched from the SDK callback thread.
+        QMetaObject::invokeMethod(this, [this, dev, connected]() {
+            if (connected) {
+                if (dev) {
+                    if (m_v4l2ScanTimer) m_v4l2ScanTimer->stop();
+                    m_device = dev;
+                    m_connected = true;
+                    m_cameraInfo.name = QString::fromStdString(m_device->devName());
+                    m_cameraInfo.serialNumber = QString::fromStdString(m_device->devSn());
+                    m_cameraInfo.version = QString::fromStdString(m_device->devVersion());
+                    m_cameraInfo.productType = m_device->productType();
+                    m_cameraInfo.connected = true;
+                    refreshControlRanges();
+                    emit cameraConnected(m_cameraInfo);
+                    updateState();
+                }
+            } else {
+                m_connected = false;
+                m_cameraInfo.connected = false;
+                resetControlRanges();
+                emit cameraDisconnected();
+            }
+        }, Qt::QueuedConnection);
     };
 
     Devices::get().setDevChangedCallback(onDevChanged, nullptr);
@@ -102,18 +114,18 @@ void CameraController::connectToCamera(const QString &devicePath)
 
 void CameraController::tryV4l2Fallback()
 {
-    auto path = V4l2Backend::findObsbotDevice();
-    if (!path.empty()) {
-        connectV4l2(path);
-        return;
-    }
+    m_sdkDeviceFound.store(false);
 
     if (!m_v4l2ScanTimer) {
         m_v4l2ScanTimer = new QTimer(this);
         m_v4l2ScanTimer->setSingleShot(false);
         connect(m_v4l2ScanTimer, &QTimer::timeout, this, [this]() {
-            if (m_connected)
+            // m_sdkDeviceFound is set atomically from the SDK thread the moment
+            // onDevChanged fires — no event-loop ordering dependency.
+            if (m_connected || m_sdkDeviceFound.load()) {
+                m_v4l2ScanTimer->stop();
                 return;
+            }
             auto path = V4l2Backend::findObsbotDevice();
             if (!path.empty()) {
                 m_v4l2ScanTimer->stop();
@@ -121,11 +133,17 @@ void CameraController::tryV4l2Fallback()
             }
         });
     }
-    m_v4l2ScanTimer->start(3000);
+    // The SDK has no "enumeration complete" signal so the timer is the only
+    // mechanism for genuine V4L2 fallback. 5s is based on observed ~4s
+    // enumeration time; m_sdkDeviceFound prevents V4L2 from firing if SDK
+    // connects within the window.
+    m_v4l2ScanTimer->start(5000);
 }
 
 void CameraController::connectV4l2(const std::string &devicePath)
 {
+    if (m_connected || m_sdkDeviceFound.load()) return;
+
     if (!m_v4l2.open(devicePath))
         return;
 

@@ -4,6 +4,7 @@
 #include <QObject>
 #include <QTimer>
 #include <QMap>
+#include <atomic>
 #include <memory>
 #include <functional>
 #include <vector>
@@ -151,6 +152,7 @@ signals:
 private:
     std::shared_ptr<Device> m_device;
     bool m_connected;
+    std::atomic<bool> m_sdkDeviceFound{false};  // written from SDK thread before invokeMethod
     QString m_selectedDevicePath;
     bool m_v4l2Only = false;
     V4l2Backend m_v4l2;
