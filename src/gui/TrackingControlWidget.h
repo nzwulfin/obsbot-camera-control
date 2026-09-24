@@ -43,6 +43,8 @@ public:
     bool isAutoZoomEnabled() const { return m_autoZoomCheckBox->isChecked(); }
     int currentTrackSpeed() const { return m_speedCombo->currentData().toInt(); }
     bool isAudioAutoGainEnabled() const { return m_audioGainCheckBox->isChecked(); }
+    int currentFramingMode() const { return m_framingModeCombo->currentData().toInt(); }
+    void setFramingMode(int mode);
     void setMirrored(bool mirrored);
     bool isInvertControls() const { return m_invertControlsCheckBox->isChecked(); }
 
@@ -56,6 +58,7 @@ private slots:
     void onAutoZoomToggled(bool checked);
     void onSpeedChanged(int index);
     void onAudioGainToggled(bool checked);
+    void onFramingModeChanged(int index);
 
     // Manual PTZ control slots
     void onXYPadChanged(float x, float y);
@@ -71,9 +74,12 @@ private:
     QComboBox *m_speedCombo;
     QCheckBox *m_audioGainCheckBox;
     QWidget *m_advancedContainer;
+    QComboBox *m_framingModeCombo;   // Meet SE: View Mode
+    QWidget *m_meetSEContainer;      // Meet SE controls container
     bool m_userInitiated;  // Track if change was user-initiated
     QTimer *m_commandTimer;  // Debounce timer for command completion
     bool m_tiny2Capabilities; // flag for advanced tracking features
+    bool m_meetSECapabilities; // flag for Meet SE tracking features
 
     // Manual PTZ controls
     XYPad *m_xyPad;
@@ -99,6 +105,7 @@ private:
     void scheduleFlush();
 
     void updateTiny2Visibility();
+    void updateMeetSEVisibility();
     void updatePTZControlsState();
 
     QGroupBox *m_trackingGroupBox;

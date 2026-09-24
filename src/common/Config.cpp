@@ -35,6 +35,10 @@ void Config::setDefaults()
     m_settings.autoZoom = false;
     m_settings.trackSpeed = 2;        // AiTrackSpeedStandard
 
+    // Meet SE tracking defaults
+    m_settings.framingSubMode = 2;    // UpperBody
+    m_settings.hardwareMirror = false;
+
     // Image controls - use auto mode by default
     m_settings.brightnessAuto = true;
     m_settings.brightness = 128;
@@ -183,6 +187,8 @@ bool Config::load(std::vector<ValidationError> &errors)
         "ai_sub_mode",
         "auto_zoom",
         "track_speed",
+        "framing_sub_mode",
+        "hardware_mirror",
         "audio_auto_gain",
         "preview_format",
         "virtual_camera_enabled",
@@ -548,6 +554,23 @@ bool Config::parseLine(const std::string &line, int lineNumber, std::vector<Vali
             addError(InvalidValue, "audio_auto_gain must be true/false or enabled/disabled");
             return false;
         }
+    } else if (key == "framing_sub_mode") {
+        try {
+            int mode = std::stoi(value);
+            if (mode < 0 || mode > 2) {
+                addError(InvalidValue, "framing_sub_mode must be between 0 and 2");
+                return false;
+            }
+            m_settings.framingSubMode = mode;
+        } catch (...) {
+            addError(InvalidValue, "framing_sub_mode must be an integer between 0 and 2");
+            return false;
+        }
+    } else if (key == "hardware_mirror") {
+        if (!parseBool(value, m_settings.hardwareMirror)) {
+            addError(InvalidValue, "hardware_mirror must be true/false or enabled/disabled");
+            return false;
+        }
     } else if (key == "preview_format") {
         m_settings.previewFormat = value;
     } else if (key == "start_minimized") {
@@ -643,6 +666,10 @@ bool Config::validateSettings(std::vector<ValidationError> &errors)
 
     if (m_settings.trackSpeed < 0 || m_settings.trackSpeed > 5) {
         addError("track_speed out of range (must be 0-5)");
+    }
+
+    if (m_settings.framingSubMode < 0 || m_settings.framingSubMode > 2) {
+        addError("framing_sub_mode out of range (must be 0-2)");
     }
 
     if (m_settings.whiteBalance == 255) {
@@ -766,6 +793,12 @@ bool Config::save()
 
     file << "# Tracking Speed (0=Lazy,1=Slow,2=Standard,3=Fast,4=Crazy,5=Auto)\n";
     file << "track_speed=" << m_settings.trackSpeed << "\n\n";
+
+    file << "# Meet SE: View Mode (0=Group, 1=CloseUp, 2=UpperBody)\n";
+    file << "framing_sub_mode=" << m_settings.framingSubMode << "\n\n";
+
+    file << "# Meet SE: Hardware horizontal flip\n";
+    file << "hardware_mirror=" << (m_settings.hardwareMirror ? "enabled" : "disabled") << "\n\n";
 
     // Image controls
     file << "# Brightness Auto Mode (when enabled, brightness slider is read-only)\n";

@@ -53,6 +53,13 @@ CameraSettingsWidget::CameraSettingsWidget(CameraController *controller, QWidget
     connect(m_faceFocusCheckBox, &QCheckBox::toggled, this, &CameraSettingsWidget::onFaceFocusToggled);
     groupLayout->addWidget(m_faceFocusCheckBox);
 
+    // Hardware Mirror (Meet SE only)
+    m_hardwareMirrorCheckBox = new QCheckBox("Hardware Mirror (Horizontal Flip)", this);
+    m_hardwareMirrorCheckBox->setToolTip("Flip the image horizontally in hardware");
+    m_hardwareMirrorCheckBox->setVisible(m_controller->hasMeetSECapabilities());
+    connect(m_hardwareMirrorCheckBox, &QCheckBox::toggled, this, &CameraSettingsWidget::onHardwareMirrorToggled);
+    groupLayout->addWidget(m_hardwareMirrorCheckBox);
+
     layout->addWidget(m_advancedGroupBox);
 
     // Image Controls Group
@@ -168,6 +175,13 @@ void CameraSettingsWidget::onFaceFocusToggled(bool checked)
 {
     m_userInitiated = true;
     m_controller->setFaceFocus(checked);
+    m_commandTimer->start(1000);
+}
+
+void CameraSettingsWidget::onHardwareMirrorToggled(bool checked)
+{
+    m_userInitiated = true;
+    m_controller->setHardwareMirror(checked);
     m_commandTimer->start(1000);
 }
 
@@ -313,6 +327,13 @@ void CameraSettingsWidget::updateFromState(const CameraController::CameraState &
             m_faceFocusCheckBox->blockSignals(true);
             m_faceFocusCheckBox->setChecked(state.faceFocusEnabled);
             m_faceFocusCheckBox->blockSignals(false);
+        }
+
+        if (m_controller->hasMeetSECapabilities() &&
+            m_hardwareMirrorCheckBox->isChecked() != state.hardwareMirror) {
+            m_hardwareMirrorCheckBox->blockSignals(true);
+            m_hardwareMirrorCheckBox->setChecked(state.hardwareMirror);
+            m_hardwareMirrorCheckBox->blockSignals(false);
         }
 
         // Image controls - DON'T update auto checkboxes from camera state
