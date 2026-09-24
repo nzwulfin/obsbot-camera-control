@@ -395,7 +395,6 @@ bool CameraController::enableAutoFraming(bool enabled)
         setFocusAbsolute(m_currentState.manualFocusValue, true);
 
         m_currentState.autoFramingEnabled = true;
-        beginSettling(2000);
         emit stateChanged(m_currentState);
         return true;
     } else {
@@ -406,7 +405,6 @@ bool CameraController::enableAutoFraming(bool enabled)
             // Leave focus as it is: turning tracking off is not a request
             // for manual focus.
             m_currentState.autoFramingEnabled = false;
-            beginSettling(2000);
             emit stateChanged(m_currentState);
         }
         return success;
