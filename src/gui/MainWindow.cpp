@@ -1244,6 +1244,10 @@ void MainWindow::loadConfiguration()
     m_trackingWidget->setTrackSpeed(settings.trackSpeed);
     m_trackingWidget->setAudioAutoGain(settings.audioAutoGain);
     m_trackingWidget->setFramingMode(settings.framingSubMode);
+    // Seed the controller's commanded state too — the widget setter alone
+    // never reaches the controller, and framingSubMode is commanded-only
+    // (the first status poll would otherwise report the constructor default).
+    m_controller->setFramingMode(settings.framingSubMode);
     m_settingsWidget->setHDREnabled(settings.hdr);
     m_settingsWidget->setFOVMode(settings.fov);
     m_settingsWidget->setFaceAEEnabled(settings.faceAE);

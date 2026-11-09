@@ -1012,9 +1012,13 @@ void CameraController::framingSubModeToSDKTypes(int mode,
 
 bool CameraController::setFramingMode(int mode)
 {
-    if (!m_connected || m_v4l2Only || !isMeetSE()) return false;
-
+    // Commanded-only value: record it regardless of connection state. The
+    // View Mode combo sync in updateFromState() treats controller state as
+    // authoritative, so an unseeded controller would snap the combo back to
+    // the constructor default on the first status poll after connect.
     m_currentState.framingSubMode = mode;
+
+    if (!m_connected || m_v4l2Only || !isMeetSE()) return false;
 
     if (m_currentState.autoFramingEnabled) {
         Device::AutoFramingType groupSingle, closeUpper;
