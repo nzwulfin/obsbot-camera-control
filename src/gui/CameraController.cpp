@@ -950,7 +950,13 @@ void CameraController::saveCurrentStateToConfig()
     settings.pan = m_currentState.pan;
     settings.tilt = m_currentState.tilt;
     settings.aiMode = m_currentState.aiMode;
-    settings.aiSubMode = m_currentState.aiSubMode;
+    // Tiny 2-only control: other cameras (e.g. Meet SE) report the 0xFF
+    // "not applicable" sentinel here, which the config loader rejects.
+    // Guard mirrors the apply-side isTiny2Family() check in
+    // applyConfigToCamera(); the config retains its last valid value.
+    if (isTiny2Family()) {
+        settings.aiSubMode = m_currentState.aiSubMode;
+    }
     settings.autoZoom = m_currentState.autoZoomEnabled;
     settings.trackSpeed = m_currentState.trackSpeedMode;
     settings.audioAutoGain = m_currentState.audioAutoGainEnabled;
