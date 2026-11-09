@@ -184,7 +184,7 @@ private:
     void connectSdkDevice(const std::shared_ptr<Device> &dev);
     void startSdkGraceThenFallback();
     void closeSdk();
-    bool isMeetSEFamily() const;
+    bool isMeetSE() const;
     void framingSubModeToSDKTypes(int mode,
                                    Device::AutoFramingType &groupSingle,
                                    Device::AutoFramingType &closeUpper) const;
