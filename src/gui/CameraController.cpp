@@ -894,6 +894,16 @@ void CameraController::applyCurrentStateToCamera(const CameraState &uiState)
     m_currentState.contrastAuto = uiState.contrastAuto;
     m_currentState.saturationAuto = uiState.saturationAuto;
 
+    // Meet SE: framing sub-mode is commanded-only (the camera status does not
+    // report it), so m_currentState.framingSubMode would otherwise hold its
+    // stale/default value here. Seed it from the UI state before
+    // enableAutoFraming() reads it — mirroring how the Tiny 2 block below
+    // applies uiState values. Hardware mirror needs no seeding: it is
+    // camera-reported (status.tiny.image_flip_hor).
+    if (isMeetSE()) {
+        m_currentState.framingSubMode = uiState.framingSubMode;
+    }
+
     // Cache the intended state
     m_cachedState = uiState;
 
