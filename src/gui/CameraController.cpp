@@ -280,14 +280,14 @@ bool CameraController::hasTiny2Capabilities() const
 
 bool CameraController::hasMeetSECapabilities() const
 {
-    return isMeetSEFamily();
+    return isMeetSE();
 }
 
 bool CameraController::enableAutoFraming(bool enabled)
 {
     if (!m_connected || m_v4l2Only) return false;
 
-    if (isMeetSEFamily()) {
+    if (isMeetSE()) {
         // Meet SE: use commanded-state tracking — poll is held at m_commandedAutoFraming
         // until gesture_auto_frame confirms the transition. No settling timer needed.
         m_commandedAutoFraming = enabled;
@@ -769,7 +769,7 @@ void CameraController::updateState()
     m_currentState.manualFocusValue = status.tiny.manual_focus_value;
     m_currentState.fovMode = status.tiny.fov;
     m_currentState.devStatus = status.tiny.dev_status;
-    if (isMeetSEFamily()) {
+    if (isMeetSE()) {
         bool cameraReports = (status.tiny.gesture_para.gesture_auto_frame != 0);
         if (m_autoFramingPending) {
             // Hold commanded state until camera poll confirms the transition.
@@ -881,7 +881,7 @@ void CameraController::applyConfigToCamera()
         setAudioAutoGain(settings.audioAutoGain);
     }
 
-    if (isMeetSEFamily()) {
+    if (isMeetSE()) {
         setFramingMode(settings.framingSubMode);
         setHardwareMirror(settings.hardwareMirror);
     }
@@ -982,10 +982,9 @@ bool CameraController::isTiny2Family() const
            m_cameraInfo.productType == ObsbotProdTinySE;
 }
 
-bool CameraController::isMeetSEFamily() const
+bool CameraController::isMeetSE() const
 {
-    return m_cameraInfo.productType == ObsbotProdMeetSE ||
-           m_cameraInfo.productType == ObsbotProdMeet2;
+    return m_cameraInfo.productType == ObsbotProdMeetSE;
 }
 
 void CameraController::framingSubModeToSDKTypes(int mode,
@@ -1011,7 +1010,7 @@ void CameraController::framingSubModeToSDKTypes(int mode,
 
 bool CameraController::setFramingMode(int mode)
 {
-    if (!m_connected || m_v4l2Only || !isMeetSEFamily()) return false;
+    if (!m_connected || m_v4l2Only || !isMeetSE()) return false;
 
     m_currentState.framingSubMode = mode;
 
@@ -1029,7 +1028,7 @@ bool CameraController::setFramingMode(int mode)
 
 bool CameraController::setHardwareMirror(bool enabled)
 {
-    if (!m_connected || m_v4l2Only || !isMeetSEFamily()) return false;
+    if (!m_connected || m_v4l2Only || !isMeetSE()) return false;
 
     bool success = executeCommand("Set hardware mirror", [this, enabled]() {
         return m_device->cameraSetImageFlipHorizonU(enabled ? 1 : 0);

@@ -179,7 +179,7 @@ private:
     bool m_whiteBalanceFallbackActive;
     int m_fallbackWhiteBalanceMode;
     bool isTiny2Family() const;
-    bool isMeetSEFamily() const;
+    bool isMeetSE() const;
     void framingSubModeToSDKTypes(int mode,
                                    Device::AutoFramingType &groupSingle,
                                    Device::AutoFramingType &closeUpper) const;
