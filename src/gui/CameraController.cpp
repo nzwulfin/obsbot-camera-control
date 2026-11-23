@@ -1,6 +1,7 @@
 #include "CameraController.h"
 #include <QThread>
 #include <QDebug>
+#include <iostream>
 #include <algorithm>
 
 static constexpr int kDefaultWhiteBalanceKelvin = 4800;
@@ -349,6 +350,7 @@ bool CameraController::enableAutoFraming(bool enabled)
         // until gesture_auto_frame confirms the transition. No settling timer needed.
         m_commandedAutoFraming = enabled;
         m_autoFramingPending = true;
+        m_autoFramingCommanded = true;
 
         if (enabled) {
             // Direct cameraSetAutoFramingModeU — no MediaMode preamble.
@@ -365,7 +367,55 @@ bool CameraController::enableAutoFraming(bool enabled)
             executeCommand("Disable AutoFraming (MeetSE)", [this]() {
                 return m_device->cameraSetMediaModeU(Device::MediaModeNormal);
             });
-            setFocusAbsolute(m_currentState.manualFocusValue, false);
+            // Leave focus as it is (matches upstream's generic disable path):
+            // turning tracking off is not a request for manual focus.
+            // Firmware 4.6.3.2 resets zoom and FOV when tracking disables, and
+            // the SDK 2.1.0_8 status read never refreshes on this device (cmd 63
+            // parse failure), so the UI would keep showing pre-toggle values
+            // against a camera that moved. Re-assert the user's manual zoom and
+            // FOV so the camera returns to the state the UI already shows.
+            // This branch also runs on reconnect (applyCurrentStateToCamera →
+            // enableAutoFraming(false)), where the mode switch resets FOV to
+            // Wide again — the second assert below is what restores it.
+            // Delayed: the mode switch needs a moment before framing commands
+            // take effect (same pattern as the generic enable path's 500 ms).
+            // Hardware quirk (firmware 4.6.3.2, verified 2026-11-23): after
+            // MediaModeNormal the camera SWALLOWS the first FOV set — the
+            // user must change FOV twice for it to take. Re-assert zoom+FOV
+            // at 500ms, then FOV again at 1500ms so the second assert lands
+            // after the swallow.
+            // Zoom and FOV are mutually exclusive (user design rule): the
+            // config holds at most one active framing setting, and the
+            // firmware reset returns framing to 1x / Wide. Restore only the
+            // ACTIVE control — one motion, one axis. A released FOV is Null
+            // (dropdown blank); an explicitly-set Wide needs no restore (the
+            // reset lands on Wide anyway). Nothing active means nothing to
+            // restore: no commands, no motion. FOV additionally needs the
+            // two-stage assert (the mode switch swallows the first FOV set
+            // on firmware 4.6.3.2); the second assert also re-lands a FOV
+            // the user set manually inside the swallow window.
+            const int fov = m_currentState.fovMode;
+            const bool fovActive = (fov == static_cast<int>(Device::FovType78)
+                                    || fov == static_cast<int>(Device::FovType65));
+            QTimer::singleShot(500, this, [this, fovActive]() {
+                if (!m_connected || m_currentState.autoFramingEnabled) return;
+                if (m_currentState.zoom > 1.0) {
+                    std::cerr << "MeetSE: re-asserting zoom " << m_currentState.zoom << std::endl;
+                    setZoom(m_currentState.zoom);
+                    emit framingRestored(QStringLiteral("zoom"));
+                } else if (fovActive) {
+                    std::cerr << "MeetSE: re-asserting fov mode " << m_currentState.fovMode << std::endl;
+                    setFOV(m_currentState.fovMode);
+                }
+            });
+            QTimer::singleShot(1500, this, [this, fovActive]() {
+                if (!m_connected || m_currentState.autoFramingEnabled) return;
+                if (fovActive) {
+                    std::cerr << "MeetSE: second FOV assert, fov mode " << m_currentState.fovMode << std::endl;
+                    setFOV(m_currentState.fovMode);
+                    emit framingRestored(QStringLiteral("field of view"));
+                }
+            });
         }
 
         m_currentState.autoFramingEnabled = enabled;
@@ -534,13 +584,21 @@ bool CameraController::setZoom(double zoom)
         success = m_v4l2.setZoomAbsolute(v4l2Zoom);
     } else {
         uint32_t zoomRatio = static_cast<uint32_t>(zoom * 100);
-        success = executeCommand("Set Zoom", [this, zoomRatio]() {
+        success = executeCommand(QStringLiteral("Set Zoom ratio %1").arg(zoomRatio), [this, zoomRatio]() {
             return m_device->cameraSetZoomWithSpeedAbsoluteR(zoomRatio, 255);
         });
     }
 
     if (success) {
         m_currentState.zoom = zoom;
+        // Meet SE design rule: zoom and FOV are mutually exclusive framing
+        // settings — setting one releases the other. Released FOV is Null
+        // (FovTypeNull), not Wide: nothing is set, and the FOV dropdown
+        // shows blank rather than a value that is not the actual state.
+        // Other cameras may compose them; rule is SE-only.
+        if (isMeetSE()) {
+            m_currentState.fovMode = static_cast<int>(Device::FovTypeNull);
+        }
         emit stateChanged(m_currentState);
     }
 
@@ -556,9 +614,18 @@ bool CameraController::setHDR(bool enabled)
 {
     if (!m_connected || m_v4l2Only) return false;
 
-    return executeCommand(enabled ? "Enable HDR" : "Disable HDR", [this, enabled]() {
+    const bool success = executeCommand(enabled ? "Enable HDR" : "Disable HDR", [this, enabled]() {
         return m_device->cameraSetWdrR(enabled ? Device::DevWdrModeDol2TO1 : Device::DevWdrModeNone);
     });
+    if (success) {
+        // Optimistic state update (mirrors setFOV): the SDK status read never
+        // refreshes on Meet SE (cmd 63 parse failure), and the poll no longer
+        // writes this field there, so the UI would otherwise keep the
+        // pre-command value.
+        m_currentState.hdrEnabled = enabled;
+        emit stateChanged(m_currentState);
+    }
+    return success;
 }
 
 bool CameraController::setFOV(int fovMode)
@@ -570,30 +637,59 @@ bool CameraController::setFOV(int fovMode)
         case 0: fov = Device::FovType86; break;
         case 1: fov = Device::FovType78; break;
         case 2: fov = Device::FovType65; break;
-        default: return false;
+        default:
+            std::cerr << "CameraController: setFOV rejected invalid mode " << fovMode << std::endl;
+            return false;
     }
 
-    return executeCommand("Set FOV", [this, fov]() {
+    const bool success = executeCommand(QStringLiteral("Set FOV mode %1 (FovType %2)")
+                                            .arg(fovMode)
+                                            .arg(static_cast<int>(fov)),
+                                        [this, fov]() {
         return m_device->cameraSetFovU(fov);
     });
+    if (success) {
+        // Optimistic state update, mirroring setZoom(): the SDK status read
+        // never refreshes on Meet SE (cmd 63 parse failure), so without this
+        // the post-tracking-off re-assert would restore a stale FOV value.
+        m_currentState.fovMode = fovMode;
+        // Mutually exclusive with zoom on the SE — see setZoom().
+        if (isMeetSE()) {
+            m_currentState.zoom = 1.0;
+        }
+        emit stateChanged(m_currentState);
+    }
+    return success;
 }
 
 bool CameraController::setFaceAE(bool enabled)
 {
     if (!m_connected || m_v4l2Only) return false;
 
-    return executeCommand(enabled ? "Enable Face AE" : "Disable Face AE", [this, enabled]() {
+    const bool success = executeCommand(enabled ? "Enable Face AE" : "Disable Face AE", [this, enabled]() {
         return m_device->cameraSetFaceAER(enabled);
     });
+    if (success) {
+        // Optimistic state update — see setHDR().
+        m_currentState.faceAEEnabled = enabled;
+        emit stateChanged(m_currentState);
+    }
+    return success;
 }
 
 bool CameraController::setFaceFocus(bool enabled)
 {
     if (!m_connected || m_v4l2Only) return false;
 
-    return executeCommand(enabled ? "Enable Face Focus" : "Disable Face Focus", [this, enabled]() {
+    const bool success = executeCommand(enabled ? "Enable Face Focus" : "Disable Face Focus", [this, enabled]() {
         return m_device->cameraSetFaceFocusR(enabled);
     });
+    if (success) {
+        // Optimistic state update — see setHDR().
+        m_currentState.faceFocusEnabled = enabled;
+        emit stateChanged(m_currentState);
+    }
+    return success;
 }
 
 bool CameraController::setFocusAbsolute(int position, bool autoFocus)
@@ -801,10 +897,16 @@ bool CameraController::setWhiteBalanceManual(int kelvin)
 bool CameraController::executeCommand(const QString &description, std::function<int32_t()> command)
 {
     int32_t ret = command();
+    // Diagnostics go to std::cerr, not qDebug(): Qt debug/info output from
+    // this binary does not reach stderr in practice (only library-level
+    // warnings do), and these traces are essential for device debugging.
     if (ret != 0) {
+        std::cerr << "CameraController: command FAILED: " << description.toStdString()
+                  << " ret = " << ret << std::endl;
         emit commandFailed(description, ret);
         return false;
     }
+    std::cerr << "CameraController: command ok: " << description.toStdString() << std::endl;
     return true;
 }
 
@@ -819,41 +921,62 @@ void CameraController::updateState()
 
     auto status = m_device->cameraStatus();
 
-    m_currentState.aiMode = status.tiny.ai_mode;
-    m_currentState.aiSubMode = status.tiny.ai_sub_mode;
+    // Live telemetry — display values, never user settings.
     m_currentState.zoomRatio = status.tiny.zoom_ratio;
-    // Derive zoom float from zoom_ratio (100 = 1.0x, 200 = 2.0x)
-    if (status.tiny.zoom_ratio >= 100 && status.tiny.zoom_ratio <= 200) {
-        m_currentState.zoom = status.tiny.zoom_ratio / 100.0;
-    } else {
-        qDebug() << "CameraController: unexpected zoom_ratio" << status.tiny.zoom_ratio
-                 << "— keeping previous zoom" << m_currentState.zoom;
-    }
-    m_currentState.hdrEnabled = status.tiny.hdr;
-    m_currentState.faceAEEnabled = status.tiny.face_ae;
-    m_currentState.faceFocusEnabled = status.tiny.face_auto_focus;
-    m_currentState.autoFocusEnabled = status.tiny.auto_focus;
-    m_currentState.manualFocusValue = status.tiny.manual_focus_value;
-    m_currentState.fovMode = status.tiny.fov;
     m_currentState.devStatus = status.tiny.dev_status;
+
     if (isMeetSE()) {
+        // Meet SE design rule: settings are user intent. The status channel
+        // never refreshes on this device (cmd 63 parse failure) — its fields
+        // report stale or garbage values, and trusting them overrode user
+        // settings (tracking force-enabled on launch, face AE/focus flipped,
+        // FOV/zoom/focus clobbered, config poisoned by state-mirroring
+        // saves). Settings change only through user commands — each setter
+        // writes state optimistically — and state is seeded from config in
+        // loadConfig(). The poll contributes telemetry only.
         bool cameraReports = (status.tiny.gesture_para.gesture_auto_frame != 0);
-        if (m_autoFramingPending) {
-            // Hold commanded state until camera poll confirms the transition.
-            // This handles gesture_auto_frame's unpredictable reporting lag without timers.
-            if (cameraReports == m_commandedAutoFraming)
-                m_autoFramingPending = false;
-            m_currentState.autoFramingEnabled = m_commandedAutoFraming;
-        } else {
-            // Camera confirmed — trust poll so gesture-triggered changes are reflected.
-            m_currentState.autoFramingEnabled = cameraReports;
+        if (m_autoFramingCommanded) {
+            if (m_autoFramingPending) {
+                // Hold commanded state until camera poll confirms the transition.
+                // This handles gesture_auto_frame's unpredictable reporting lag without timers.
+                if (cameraReports == m_commandedAutoFraming)
+                    m_autoFramingPending = false;
+                m_currentState.autoFramingEnabled = m_commandedAutoFraming;
+            } else {
+                // Camera confirmed — trust poll so gesture-triggered changes are reflected.
+                m_currentState.autoFramingEnabled = cameraReports;
+            }
         }
+        // else: no tracking command issued yet this session — hold the state
+        // seeded from config. The frozen status channel reports stale
+        // gesture_auto_frame on first connect; trusting it re-enabled
+        // tracking against the persisted config before the first apply ran
+        // ("close and reopen, resets to auto").
         m_currentState.hardwareMirror = (status.tiny.image_flip_hor != 0);
     } else {
+        m_currentState.aiMode = status.tiny.ai_mode;
+        m_currentState.aiSubMode = status.tiny.ai_sub_mode;
+        // Derive zoom float from zoom_ratio (100 = 1.0x, 200 = 2.0x)
+        if (status.tiny.zoom_ratio >= 100 && status.tiny.zoom_ratio <= 200) {
+            m_currentState.zoom = status.tiny.zoom_ratio / 100.0;
+        } else {
+            qDebug() << "CameraController: unexpected zoom_ratio" << status.tiny.zoom_ratio
+                     << "— keeping previous zoom" << m_currentState.zoom;
+        }
+        m_currentState.hdrEnabled = status.tiny.hdr;
+        m_currentState.faceAEEnabled = status.tiny.face_ae;
+        m_currentState.faceFocusEnabled = status.tiny.face_auto_focus;
+        m_currentState.autoFocusEnabled = status.tiny.auto_focus;
+        m_currentState.manualFocusValue = status.tiny.manual_focus_value;
         m_currentState.autoFramingEnabled = (m_currentState.aiMode != Device::AiWorkModeNone);
+        m_currentState.trackSpeedMode = status.tiny.ai_tracker_speed;
+        m_currentState.audioAutoGainEnabled = status.tiny.audio_auto_gain;
+        // Only accept valid FOV modes (0-2); FovTypeNull (3) and other
+        // sentinels must not clobber the current setting.
+        if (status.tiny.fov >= 0 && status.tiny.fov <= 2) {
+            m_currentState.fovMode = status.tiny.fov;
+        }
     }
-    m_currentState.trackSpeedMode = status.tiny.ai_tracker_speed;
-    m_currentState.audioAutoGainEnabled = status.tiny.audio_auto_gain;
 
     // Image controls - read current values from camera
     // Note: Preserve auto mode flags - camera doesn't have concept of "auto" for these
@@ -906,7 +1029,51 @@ void CameraController::beginSettling(int durationMs)
 
 bool CameraController::loadConfig(std::vector<Config::ValidationError> &errors)
 {
-    return m_config.load(errors);
+    const bool ok = m_config.load(errors);
+    if (ok) {
+        // Seed the full state from config so every state-mirroring save
+        // (including any save fired between load and the first apply)
+        // writes the persisted values straight back instead of constructor
+        // defaults. Settings are user intent: nothing but a user command may
+        // change them, and on the Meet SE the poll no longer writes setting
+        // fields at all (see updateState).
+        const Config::CameraSettings settings = m_config.getSettings();
+        m_currentState.autoFramingEnabled = settings.faceTracking;
+        m_currentState.hdrEnabled = settings.hdr;
+        m_currentState.faceAEEnabled = settings.faceAE;
+        m_currentState.faceFocusEnabled = settings.faceFocus;
+        m_currentState.fovMode = settings.fov;
+        m_currentState.zoom = qBound(1.0, settings.zoom, 2.0);
+        // Normalize a stale conflicting pair (older builds saved both): FOV
+        // wins as the structural sensor-mode setting, zoom releases to
+        // default. A released FOV (Null) is not a competing value — zoom
+        // stays active. From here on the setters keep the pair exclusive.
+        if (isMeetSE() && m_currentState.zoom > 1.0
+            && (m_currentState.fovMode == static_cast<int>(Device::FovType78)
+                || m_currentState.fovMode == static_cast<int>(Device::FovType65))) {
+            m_currentState.zoom = 1.0;
+        }
+        m_currentState.pan = settings.pan;
+        m_currentState.tilt = settings.tilt;
+        m_currentState.aiMode = settings.aiMode;
+        m_currentState.aiSubMode = settings.aiSubMode;
+        m_currentState.autoZoomEnabled = settings.autoZoom;
+        m_currentState.trackSpeedMode = settings.trackSpeed;
+        m_currentState.audioAutoGainEnabled = settings.audioAutoGain;
+        m_currentState.framingSubMode = settings.framingSubMode;
+        m_currentState.hardwareMirror = settings.hardwareMirror;
+        m_currentState.autoFocusEnabled = settings.focus < 0;
+        m_currentState.manualFocusValue = settings.focus < 0 ? 0 : settings.focus;
+        m_currentState.brightnessAuto = settings.brightnessAuto;
+        m_currentState.brightness = settings.brightness;
+        m_currentState.contrastAuto = settings.contrastAuto;
+        m_currentState.contrast = settings.contrast;
+        m_currentState.saturationAuto = settings.saturationAuto;
+        m_currentState.saturation = settings.saturation;
+        m_currentState.whiteBalance = settings.whiteBalance;
+        m_currentState.whiteBalanceKelvin = settings.whiteBalanceKelvin;
+    }
+    return ok;
 }
 
 bool CameraController::saveConfig()
@@ -999,7 +1166,10 @@ void CameraController::applyCurrentStateToCamera(const CameraState &uiState)
     // Focus is not part of the UI state, so restore it from config. Turning
     // auto-framing on already switched to auto focus; in V4L2 mode or when
     // that failed, nothing did.
-    if (!framingOn) {
+    // Meet SE: skip this. enableAutoFraming() manages focus itself (AF on
+    // enable, restore on disable); forcing it here too kills auto focus on
+    // every reconnect apply (minimize/restore) behind the user's back.
+    if (!framingOn && !isMeetSE()) {
         int focus = m_config.getSettings().focus;
         if (focus >= 0) {
             setFocusAbsolute(focus, false);

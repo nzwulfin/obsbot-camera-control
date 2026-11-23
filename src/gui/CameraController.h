@@ -152,12 +152,14 @@ signals:
     void stateChanged(const CameraState &state);
     void commandFailed(const QString &description, int errorCode);
     void configLoaded();  // Emitted after config is successfully loaded
+    void framingRestored(const QString &what);  // Meet SE: which framing control was re-applied ("zoom" / "field of view")
 
 private:
     std::shared_ptr<Device> m_device;
     bool m_connected;
     bool m_commandedAutoFraming;  // Meet SE: last value sent to camera
     bool m_autoFramingPending;    // Meet SE: true until poll confirms commanded state
+    bool m_autoFramingCommanded = false;  // Meet SE: any tracking command issued this session
     QString m_selectedDevicePath;
     bool m_v4l2Only = false;
     V4l2Backend m_v4l2;

@@ -352,8 +352,12 @@ bool Config::parseLine(const std::string &line, int lineNumber, std::vector<Vali
             m_settings.fov = 1;
         } else if (value == "narrow" || value == "2") {
             m_settings.fov = 2;
+        } else if (value == "null" || value == "none" || value == "unset" || value == "3") {
+            // No FOV set — zoom owns the framing (the controls are mutually
+            // exclusive on the Meet SE; 3 == Device::FovTypeNull).
+            m_settings.fov = 3;
         } else {
-            addError(InvalidValue, "fov must be wide/medium/narrow or 0/1/2");
+            addError(InvalidValue, "fov must be wide/medium/narrow/null or 0-3");
             return false;
         }
     } else if (key == "zoom") {
@@ -640,8 +644,8 @@ bool Config::validateSettings(std::vector<ValidationError> &errors)
         errors.push_back(err);
     };
 
-    if (m_settings.fov < 0 || m_settings.fov > 2) {
-        addError("fov out of range (must be 0-2)");
+    if (m_settings.fov < 0 || m_settings.fov > 3) {
+        addError("fov out of range (must be 0-3; 3 = null/unset)");
     }
 
     if (m_settings.zoom != 0.0 && (m_settings.zoom < 1.0 || m_settings.zoom > 2.0)) {
@@ -763,8 +767,10 @@ bool Config::save()
     file << "# High Dynamic Range\n";
     file << "hdr=" << (m_settings.hdr ? "enabled" : "disabled") << "\n\n";
 
-    file << "# Field of View (wide/medium/narrow)\n";
-    std::string fovStr = m_settings.fov == 0 ? "wide" : (m_settings.fov == 1 ? "medium" : "narrow");
+    file << "# Field of View (wide/medium/narrow, or null when zoom owns framing)\n";
+    std::string fovStr = m_settings.fov == 0 ? "wide"
+                       : (m_settings.fov == 1 ? "medium"
+                       : (m_settings.fov == 2 ? "narrow" : "null"));
     file << "fov=" << fovStr << "\n\n";
 
     file << "# Face-based Auto Exposure\n";

@@ -106,6 +106,7 @@ private:
     QLabel *m_deviceInfoLabel;
     QLabel *m_cameraWarningLabel;  // Warning for camera in use
     QLabel *m_statusLabel;
+    qint64 m_statusNoteUntilMs {0};  // Hold transient status notes this long (ms epoch)
     QCheckBox *m_startMinimizedCheckbox;
     QLabel *m_statusChip;
     QSplitter *m_splitter;

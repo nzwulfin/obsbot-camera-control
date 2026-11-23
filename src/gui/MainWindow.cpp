@@ -177,6 +177,14 @@ MainWindow::MainWindow(QWidget *parent)
             this, &MainWindow::onStateChanged);
     connect(m_controller, &CameraController::commandFailed,
             this, &MainWindow::onCommandFailed);
+    connect(m_controller, &CameraController::framingRestored, this, [this](const QString &what) {
+        // Transparent re-imposition: the app re-applied the active framing
+        // control after the tracking-off reset, and says which one — never
+        // a bundle, the controls are exclusive by design. Held for 5 s (the
+        // 2 s status refresh would otherwise wipe it before it registers).
+        m_statusLabel->setText(QStringLiteral("Status: tracking off — %1 restored").arg(what));
+        m_statusNoteUntilMs = QDateTime::currentMSecsSinceEpoch() + 5000;
+    });
 
     m_virtualCameraStreamer = new VirtualCameraStreamer(this);
     connect(m_virtualCameraStreamer, &VirtualCameraStreamer::errorOccurred,
@@ -931,9 +939,17 @@ void MainWindow::updateStatusBanner(bool connected)
 {
     m_statusBanner->setProperty("state", connected ? "connected" : "disconnected");
     m_statusChip->setText(connected ? tr("Camera • Online") : tr("Camera • Offline"));
+    // Repolish the chip as well as the banner: the chip's colors come from a
+    // dependent selector (QFrame#statusBanner[state=...] QLabel#statusChip),
+    // and Qt only re-evaluates dependent selectors for widgets that are
+    // explicitly repolished. Without this the chip keeps its gray
+    // "disconnected" style inside the blue connected banner.
     m_statusBanner->style()->unpolish(m_statusBanner);
     m_statusBanner->style()->polish(m_statusBanner);
+    m_statusChip->style()->unpolish(m_statusChip);
+    m_statusChip->style()->polish(m_statusChip);
     m_statusBanner->update();
+    m_statusChip->update();
 }
 
 void MainWindow::onTogglePreview(bool enabled)
@@ -1063,9 +1079,17 @@ void MainWindow::onCameraConnected(const CameraController::CameraInfo &info)
             auto state = m_controller->getCurrentState();
             onStateChanged(state);
             m_isCameraSwitch = false;
-        } else {
+        } else if (!m_controller->hasMeetSECapabilities()) {
             m_controller->applyCurrentStateToCamera(getUIState());
         }
+        // Meet SE: connecting commands nothing. The camera persists its own
+        // state across app-side disconnects (minimize/restore) and app
+        // restarts, and the UI already holds the stored settings (config
+        // seed in loadConfig). Imposing state on connect re-sent commands
+        // that already matched — and the redundant mode command made the
+        // firmware visibly reset and re-choreograph framing on every launch
+        // and window restore. Motion is a response to user action, not to
+        // lifecycle events; the user's first control touch syncs any drift.
     });
 
     updateStatus();
@@ -1134,11 +1158,25 @@ void MainWindow::updateStatus()
         return;
     }
 
+    // Hold transient notes (e.g. "tracking off — restored zoom & FOV")
+    // for their full display window before resuming the live status line.
+    if (QDateTime::currentMSecsSinceEpoch() < m_statusNoteUntilMs) {
+        return;
+    }
+
     auto state = m_controller->getCurrentState();
 
     QStringList statusParts;
     statusParts << QString("AI: %1").arg(state.aiMode == 0 ? "Off" : "On");
-    statusParts << QString("Zoom: %1%").arg(state.zoomRatio);
+    // Meet SE: the status channel is frozen (cmd 63 never parses), so
+    // zoomRatio is garbage bytes there, not a percentage — show the app's
+    // zoom setting instead. Percentage is the zoom AMOUNT: 1x = 0% (none
+    // applied), 2x = 100%. Other cameras have a live status channel and
+    // keep the reported ratio.
+    const int zoomPct = m_controller->hasMeetSECapabilities()
+                            ? qRound((state.zoom - 1.0) * 100.0)
+                            : state.zoomRatio;
+    statusParts << QString("Zoom: %1%").arg(zoomPct);
     statusParts << QString("HDR: %1").arg(state.hdrEnabled ? "On" : "Off");
     statusParts << QString("Face AE: %1").arg(state.faceAEEnabled ? "On" : "Off");
     statusParts << QString("Focus: %1").arg(state.autoFocusEnabled ? "Auto" : "Manual");
